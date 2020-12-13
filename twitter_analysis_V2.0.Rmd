@@ -1,0 +1,446 @@
+---
+title: "Twitter Text Mining"
+author: "Rezwan"
+date: "December 10, 2020"
+output: html_document
+---
+
+Context: This was the beginning of Stay-at-home order here in Ohio, back in late March this year. "Corona Virus" became the latest buzzword of every discussion. For the first time in a century, we experienced an unprecedented global pandemic. We didn't know what to expect in the upcoming days and months. Everyone was worried and anxious, as the future was uncertain. At that time, I thought why not collect some tweets and see public reactions about this novel Coronavirus [#Covid19, #coronavirus] across the world. On March 24, 2020, I collected these tweets using Twitter API and rtweets library. These codes are written based on those Twitter data.
+
+
+###1.0 Getting data from Twitter 
+```{r, eval= FALSE}
+#remove everything from global environment 
+rm(list = ls())
+# load required packages 
+if(!require(rtweet)){
+  install.packages("rtweet")
+  library(rtweet)
+}
+## authenticate via web browser
+token <- create_token(
+  app = "media_com_research",
+  consumer_key = api_key,
+  consumer_secret = api_secret_key,
+  access_token = access_token,
+  access_secret = access_token_secret)
+
+
+## search for 18000 tweets using the rstats hashtag
+rt <- search_tweets(
+  "#COVID19", n = 18000, include_rts = FALSE
+)
+#set the working directory 
+setwd("C:/Twitter_Harvesting")
+
+#save the file in csv format 
+st <- format(Sys.time(), "%Y-%m-%d_%H:%M")
+file_name <- paste("covid19_",st, ".csv", sep = "")
+write_as_csv(rt,paste0( "covid19_",format(Sys.time(), "%d-%b-%Y %H.%M"), ".csv"))
+```
+
+
+###2.0 How many tweets we have in the dataset? 
+
+```{r, load-data-file, warning=FALSE, message=FALSE}
+#load required libraries 
+library(readr)
+library(dplyr)
+library(tidytext)
+library(ggplot2)
+library(stringr)
+library(tidyverse)
+library(reshape2)
+library(ggplot2)
+library(plotly)
+library(ggridges)
+library(lubridate)
+library(rtweet)
+library(maps)
+library(quanteda)
+  
+#read the twitter data 
+allTweets <- read_twitter_csv("covid19_24-Mar-2020 22.27.csv", unflatten = T)
+#check the dimension of the data frame 
+dim(allTweets)
+```
+
+We have 17,979 tweets with 90 variables in the data frame. 
+
+###3.0  Frequency of Tweets 
+
+```{r,tweetfrequency, warning=FALSE, message=FALSE}
+freq_plot<- allTweets %>%
+  ts_plot("mins", color = '#00AFBB') +
+  ggplot2::theme_minimal() +
+  ggplot2::theme(plot.title = ggplot2::element_text(face = "bold")) +
+  ggplot2::labs(
+    x = NULL, y = NULL,
+    title = "Frequency of #covid19 Twitter statuses covid19_24-Mar-2020",
+    caption = "\nSource: Data collected from Twitter's REST API via rtweet"
+  )
+#plot the figure 
+freq_plot %>% ggplotly()
+
+```
+
+
+###4.0  Location of Twitter Users  
+```{r,warning=FALSE, message=FALSE}
+user_plot <- allTweets %>%
+  count(location, sort = TRUE) %>%
+  mutate(location = reorder(location, n)) %>%
+  na.omit() %>%
+  top_n(20) %>%
+  ggplot(aes(x = location, y = n)) +
+  theme_minimal()+
+  geom_col(fill='#00AFBB') +
+  coord_flip() +
+      labs(x = "Count",
+      y = "Location",
+      title = "Where Twitter users are from - unique locations ")
+#plot the figure 
+user_plot %>%  ggplotly()
+
+```
+
+###5.0  Map of Twitter Users in the US
+```{r,warning=FALSE, message=FALSE}
+
+# Convert UTC to EDT
+allTweets <- allTweets %>% 
+  mutate(created_at = as_datetime(created_at, tz = "UTC")) %>% 
+  mutate(created_at = with_tz(created_at, tzone = "America/New_York"))
+
+# Produce lat and lng coordinates
+allTweets <- lat_lng(allTweets)
+# Plot
+par(mar = rep(12, 4))
+map("state", lwd = .02)
+# plot lat and lng points onto state map
+with(allTweets, points(lng, lat,
+                       pch = 16, cex = .25,
+                       col = rgb(.8, .2, 0, .2)))
+  
+```
+
+###6.0  Tweet Languages 
+```{r,warning=FALSE, message=FALSE}
+
+lang_plot <- allTweets %>%
+  count(lang, sort = TRUE) %>%
+  mutate(lang = reorder(lang, n)) %>%
+  na.omit() %>%
+  top_n(10) %>%
+  ggplot(aes(x = lang, y = n)) +
+  ggplot2::theme(plot.title = ggplot2::element_text(face = "bold"))+
+  theme_minimal()+
+  geom_col(fill='#00AFBB') +
+  coord_flip() +
+      labs(x = "Count",
+      y = "Language",
+      title = "Top 10 languages ")
+#plot the figure 
+lang_plot %>%  ggplotly()
+
+```
+
+###7.0  Most Frequent words in Tweets 
+
+```{r,warning=FALSE, message=FALSE}
+# select only english tweets
+English_tweets <- allTweets %>%
+  filter(allTweets$lang == "en")
+
+#check the most frequent words
+English_tweets %>%
+  unnest_tokens(word, text)%>%
+  count(word, sort = TRUE)%>%
+  anti_join(stop_words, by="word")
+```
+
+There are many nonsensical words in the corpus. We need to remove them from our corpus. 
+
+```{r,warning=FALSE, message=FALSE}
+# create a dataframe with four relevant variables
+# filter out retweets 
+tidy_tweets <- tibble(
+  screen_name = English_tweets$screen_name,
+  tweetid = English_tweets$status_id,
+  created_timestamp = English_tweets$created_at,
+  is_retweet = English_tweets$is_retweet,
+  text = English_tweets$text) %>%
+  filter(is_retweet == FALSE,
+         substr(text, 1,2) != "RT")
+
+# create a list of custom stop words 
+my_stop_words <- tibble(
+  word = c("https","t.co","rt","amp", "rstats",
+    "gt","de","la", "en","el","Ã¢", "Ã£", "las",
+    "por", "se","para", "fe0f","19","2", "uf"),
+  lexicon = "twitter"
+)
+
+#combine them with default stop words list 
+all_stop_words <- stop_words %>%
+  bind_rows(my_stop_words)
+
+#create a list of most frequent words appeared in the tweets 
+tweet_words <- tidy_tweets %>%
+  unnest_tokens(word,text)%>%
+  count(word,sort=TRUE)%>%
+  anti_join(all_stop_words, by = "word")
+
+#create a graph of the most frequent words 
+words_tweet<- tweet_words %>%
+  head(20)%>%
+  mutate(word = fct_reorder(word,n)) %>%
+  ggplot(aes(word,n))+
+  geom_col(fill='#00AFBB')+
+  coord_flip()+
+  labs(title = "Words that appear in many tweets")+
+  theme_bw()
+#plot the frequency barplot 
+words_tweet %>%  ggplotly()
+```
+
+###8.0  Sentiment Analysis 
+
+```{r,warning=FALSE, message=FALSE}
+# my_stop_words <- tibble(
+#   word = c(
+#     "https","t.co","rt","amp","rstats",
+#     "gt", "de","la","en","el","Ã¢", "Ã£",
+#     "las","por", "se","para", "fe0f","19", "uf"
+#   ),
+#   lexicon = "twitter"
+# )
+
+# all_stop_words <- stop_words %>%
+#   bind_rows(my_stop_words)
+
+#filter out empty tweets 
+suppressWarnings({
+  no_numbers <- tweet_words %>%
+    filter(is.na(as.numeric(word)))
+})
+
+#combine them with default stop words list 
+no_stop_words <- no_numbers %>%
+  anti_join(all_stop_words, by = "word")
+
+#import library
+library(textdata)
+
+#get sentiment from bing library
+bing_words <- no_stop_words %>%
+  inner_join(get_sentiments("bing"), by = "word")
+
+
+#plot the words that contribute to positive and negative sentiments 
+bing_words %>% 
+ group_by(sentiment) %>%
+  head(30)%>%
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(x = "Contribution to sentiment",
+       y = NULL)+
+  coord_flip()+
+  theme_minimal()
+
+
+```
+
+As expected, words like death, outbreak,infection, virus contribute to the negative emotions. On the other hand, people protrayed their positive emotions in words like help, support, heatlhy, love. 
+
+###9.0  Networks of Words 
+
+```{r,warning=FALSE, message=FALSE}
+#load the library 
+library(widyr)
+
+#create a dataframe of tweets and ids 
+tweets_ids <- tibble(id = tidy_tweets$tweetid, 
+                     title = tidy_tweets$text)
+
+# remove common stop words 
+tweets_ids <- tweets_ids %>% 
+  unnest_tokens(word, title) %>% 
+  anti_join(all_stop_words, by="word")
+
+# create word pairs from tweets and sort by frequency 
+title_word_pairs <- tweets_ids %>% 
+  pairwise_count(word, id, sort = TRUE, upper = FALSE)
+title_word_pairs 
+```
+
+One pattern is distinctive here. As that was early of stay-home order in many states, people tweeted repeatedly about covid19 and stay home together. Let’s plot these pairs in a network to understand their relationships
+
+```{r,warning=FALSE, message=FALSE}
+#load libraries 
+library(igraph)
+library(ggraph)
+
+#plot the network graph
+set.seed(1234)
+title_word_pairs %>%
+  dplyr::filter(n >= 100) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n, edge_width = n), edge_colour = "cyan4") +
+  geom_node_point(size = 5) +
+  geom_node_text(aes(label = name), repel = TRUE, 
+                 point.padding = unit(0.2, "lines")) +
+  theme_void()
+
+```
+
+Let's filter out the less frequent pairs. 
+
+```{r,warning=FALSE, message=FALSE}
+# plot only those pairs which occured more than 250 times 
+title_word_pairs %>%
+  dplyr::filter(n >= 250) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n, edge_width = n), edge_colour = "cyan4") +
+  geom_node_point(size = 5) +
+  geom_node_text(aes(label = name), repel = TRUE, 
+                 point.padding = unit(0.2, "lines")) +
+  theme_void()
+```
+
+Stayhome, quarantine, crisis, lockdown, health, president trump - these are the most common themes in the tweets. 
+
+###10.0  Topic Modeling 
+
+```{r,warning=FALSE, message=FALSE}
+# read in the libraries we're going to use
+library(tidyverse) 
+library(tidytext) 
+library(topicmodels) 
+library(tm) 
+library(SnowballC) 
+
+# function to get & plot the most informative terms by a specificed number
+# of topics, using LDA
+top_terms_by_topic_LDA <- function(input_text, 
+                                   plot = T, 
+                                   number_of_topics = 4) 
+{    
+    # create a corpus (type of object expected by tm) and document term matrix
+    Corpus <- Corpus(VectorSource(input_text)) 
+    DTM <- DocumentTermMatrix(Corpus) 
+    unique_indexes <- unique(DTM$i) 
+    DTM <- DTM[unique_indexes,] 
+    
+    # preform LDA & get the words/topic in a tidy text format
+    lda <- LDA(DTM, k = number_of_topics, control = list(seed = 1234, alpha = 0.1))
+    topics <- tidy(lda, matrix = "beta")
+
+    # get the top ten terms for each topic
+    top_terms <- topics  %>% 
+      group_by(topic) %>% 
+      top_n(10, beta) %>% 
+      ungroup() %>% 
+      arrange(topic, -beta) 
+
+    # if the user asks for a plot (TRUE by default)
+    if(plot == T){
+        # plot the top ten terms for each topic in order
+         top_terms %>%
+          mutate(term = reorder(term, beta)) %>% 
+          ggplot(aes(term, beta, fill = factor(topic))) + 
+          geom_col(show.legend = FALSE) + 
+          facet_wrap(~ topic, scales = "free") + 
+          labs(x = NULL, y = "Beta") + 
+          coord_flip()+ 
+          theme_minimal()
+        
+    }else{ 
+        # if the user does not request a plot
+        # return a list of sorted terms instead
+        return(top_terms)
+    }
+}
+
+#let's check the inital two topic models 
+top_terms_by_topic_LDA(tidy_tweets$text, number_of_topics = 2)
+```
+
+These topics do not make sense, as we have lots of pronouns, prepositions and so on. We need to prepare out tweets before doing topic modeling to get better results
+
+```{r,warning=FALSE, message=FALSE}
+# cleaning tweets 
+tidy_tweets$text = gsub("&amp", "", tidy_tweets$text)
+#remove retweet entities 
+tidy_tweets$text = gsub("(RT|via)((?:\\b\\W*@\\w+)+)", "", tidy_tweets$text)
+#remove at people 
+tidy_tweets$text = gsub("@\\w+", "", tidy_tweets$text)
+#remove punctuation
+tidy_tweets$text = gsub("[[:punct:]]", "", tidy_tweets$text)
+#remove numbers 
+tidy_tweets$text = gsub("[[:digit:]]", "", tidy_tweets$text)
+#remove html links 
+tidy_tweets$text = gsub("http\\w+", "", tidy_tweets$text)
+#remove unnecessary space 
+tidy_tweets$text = gsub("[ \t]{2,}", "", tidy_tweets$text)
+tidy_tweets$text = gsub("^\\s+|\\s+$", "", tidy_tweets$text)
+
+tidy_tweets$text[1:5]
+
+```
+
+```{r,warning=FALSE, message=FALSE}
+# create a corpus (type of object expected by tm) and document term matrix
+covidCorpus <- Corpus(VectorSource(tidy_tweets$text)) 
+covidDTM <- DocumentTermMatrix(covidCorpus)
+
+# convert the document term matrix to a tidytext corpus
+covidDTM_tidy <- tidy(covidDTM)
+
+# I'm going to add my own custom stop words 
+custom_stop_words <- tibble(word = c("https",
+    "t.co","rt","amp","rstats","gt", "de",
+    "la","en","el","Ã¢", "Ã£", "las",
+    "por", "se","para", "fe0f","19","2","3", "UFT"))
+
+# remove stopwords
+covidDTM_tidy_cleaned <- covidDTM_tidy %>% 
+    anti_join(stop_words, by = c("term" = "word")) %>% 
+    anti_join(custom_stop_words, by = c("term" = "word")) 
+
+# reconstruct cleaned documents (so that each word shows up the correct number of times)
+cleaned_documents <- covidDTM_tidy_cleaned %>%
+    group_by(document) %>% 
+    mutate(terms = toString(rep(term, count))) %>%
+    select(document, terms) %>%
+    unique()
+
+top_terms_by_topic_LDA(cleaned_documents$terms, number_of_topics = 5)
+```
+
+
+From the above plot, we can infer five overarching themes in the English tweets:
+
+a) Crisis in Lockdown
+b) Caring for friends and family
+c) Risks and Symptoms of Covid
+d) economy, lockdown, and president trump
+e) Staying home, love, and safety
+
+Overall, as this was the beginning of pandemic, lockdown, and staying home, not surprisingly, most of the covid-19 tweets talked about these topics.
+
+
+
+
+
+
+
+
+
+
+
